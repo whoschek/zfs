@@ -575,6 +575,9 @@ test_snapshot_list_batch(const char *dataset)
 	fnvlist_add_boolean(props, "createtxg");
 	fnvlist_add_boolean(props, "creation");
 	fnvlist_add_boolean(props, "guid");
+	fnvlist_add_boolean(props, "inconsistent");
+	fnvlist_add_boolean(props, "numclones");
+	fnvlist_add_boolean(props, "redacted");
 	fnvlist_add_boolean(props, "userrefs");
 	fnvlist_add_nvlist(required, SNAP_ITER_BATCH_PROPS, props);
 
