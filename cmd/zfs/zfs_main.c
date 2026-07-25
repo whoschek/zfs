@@ -4033,8 +4033,11 @@ found3:;
 	/*
 	 * Handle users who want to list all snapshots or bookmarks
 	 * of the current dataset (ex. 'zfs list -t snapshot <dataset>').
+	 * The masks accept any nonempty subset of snapshots and bookmarks while
+	 * excluding combinations that also request filesystems or volumes.
 	 */
-	if ((types == ZFS_TYPE_SNAPSHOT || types == ZFS_TYPE_BOOKMARK) &&
+	if ((types & (ZFS_TYPE_SNAPSHOT | ZFS_TYPE_BOOKMARK)) != 0 &&
+	    (types & ~(ZFS_TYPE_SNAPSHOT | ZFS_TYPE_BOOKMARK)) == 0 &&
 	    argc > 0 && (flags & ZFS_ITER_RECURSE) == 0 && limit == 0) {
 		flags |= (ZFS_ITER_DEPTH_LIMIT | ZFS_ITER_RECURSE);
 		limit = 1;

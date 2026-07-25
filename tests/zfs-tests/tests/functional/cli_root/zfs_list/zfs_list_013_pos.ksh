@@ -14,7 +14,8 @@
 #    volumes, snapshots, bookmarks, sort keys, and JSON output.
 # 2. Verify empty output and exact counts at 1023, 1024, and 1025 snapshots.
 # 3. Verify maximum-length snapshot and bookmark names.
-# 4. Verify default, tied, explicit-name, and mixed-type ordering.
+# 4. Verify default, tied, explicit-name, and mixed-type ordering, including
+#    implicit depth for combined snapshot and bookmark listings.
 # 5. Compare all 63 nonempty subsets of six common properties with full stats.
 # 6. List snapshots while another process creates, renames, and destroys one.
 #
@@ -267,6 +268,7 @@ printf "%s\n" "$SUBSET_DATASET@m_oldest" "$SUBSET_DATASET@z_middle" \
     "$SUBSET_DATASET@a_newest" "$SUBSET_DATASET#a_newest" \
     "$SUBSET_DATASET#m_oldest" "$SUBSET_DATASET#z_middle" \
     > "$EXPECTED_OUTPUT"
+compare_order snapshot,bookmark ""
 compare_order snapshot,bookmark "-d 1"
 
 set -A property_array $PROPERTIES
