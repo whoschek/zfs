@@ -95,6 +95,7 @@ zfs_callback(zfs_handle_t *zhp, void *data)
 	boolean_t should_close = B_TRUE;
 	boolean_t include_snaps = zfs_include_snapshots(zhp, cb);
 	boolean_t include_bmarks = (cb->cb_types & ZFS_TYPE_BOOKMARK);
+	int ret = 0;
 
 	if ((zfs_get_type(zhp) & cb->cb_types) ||
 	    ((zfs_get_type(zhp) == ZFS_TYPE_SNAPSHOT) && include_snaps)) {
@@ -142,8 +143,10 @@ zfs_callback(zfs_handle_t *zhp, void *data)
 		    (cb->cb_types &
 		    (ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME))) &&
 		    zfs_get_type(zhp) == ZFS_TYPE_FILESYSTEM) {
-			(void) zfs_iter_filesystems_v2(zhp, cb->cb_flags,
+			ret = zfs_iter_filesystems_v2(zhp, cb->cb_flags,
 			    zfs_callback, data);
+			if (ret != 0)
+				goto recurse_done;
 		}
 
 		if (((zfs_get_type(zhp) & (ZFS_TYPE_SNAPSHOT |
@@ -156,23 +159,26 @@ zfs_callback(zfs_handle_t *zhp, void *data)
 			 */
 			if (snapshot_flags & ZFS_ITER_BATCHED)
 				snapshot_flags |= ZFS_ITER_BATCHED_CREATETXG;
-			(void) zfs_iter_snapshots_v2(zhp, snapshot_flags,
+			ret = zfs_iter_snapshots_v2(zhp, snapshot_flags,
 			    zfs_callback, data, 0, 0);
+			if (ret != 0)
+				goto recurse_done;
 		}
 
 		if (((zfs_get_type(zhp) & (ZFS_TYPE_SNAPSHOT |
 		    ZFS_TYPE_BOOKMARK)) == 0) && include_bmarks) {
-			(void) zfs_iter_bookmarks_v2(zhp, cb->cb_flags,
+			ret = zfs_iter_bookmarks_v2(zhp, cb->cb_flags,
 			    zfs_callback, data);
 		}
 
+	recurse_done:
 		cb->cb_depth--;
 	}
 
 	if (should_close)
 		zfs_close(zhp);
 
-	return (0);
+	return (ret);
 }
 
 int

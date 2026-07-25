@@ -25,6 +25,7 @@ static int handle_enomem_armed;
 static int handle_enomem_injected;
 static int empty_batch_injected;
 static int real_enomem_injected;
+static int dataset_batch_seen;
 
 static int
 write_all(int fd, const char *buffer, size_t length)
@@ -209,20 +210,57 @@ out:
 	return (error);
 }
 
+static boolean_t
+matches_target(const char *name, const char *target)
+{
+	return (target == NULL || strcmp(name, target) == 0);
+}
+
+static boolean_t
+is_projected_bookmark_props(nvlist_t *props)
+{
+	nvpair_t *pair = NULL;
+	unsigned int count = 0;
+
+	while ((pair = nvlist_next_nvpair(props, pair)) != NULL)
+		count++;
+	return (count == 2 &&
+	    nvlist_exists(props, zfs_prop_to_name(ZFS_PROP_CREATETXG)) &&
+	    nvlist_exists(props, zfs_prop_to_name(ZFS_PROP_CREATION)));
+}
+
 int
 lzc_get_bookmarks(const char *fsname, nvlist_t *props, nvlist_t **bmarks)
 {
 	static lzc_get_bookmarks_fn_t next;
 	const char *mode = getenv("ZFS_SNAPSHOT_LIST_TEST_MODE");
+	const char *target = getenv("ZFS_SNAPSHOT_LIST_TEST_TARGET");
+	boolean_t require_projected = B_FALSE;
 	int error = 0;
 
-	if (mode != NULL && strcmp(mode, "bookmark_eio") == 0)
-		error = EIO;
-	else if (mode != NULL && strcmp(mode, "bookmark_enoent") == 0)
-		error = ENOENT;
-	else if (mode != NULL && strcmp(mode, "bookmark_esrch") == 0)
-		error = ESRCH;
+	if (mode != NULL && matches_target(fsname, target)) {
+		if (strcmp(mode, "bookmark_eio") == 0)
+			error = EIO;
+		else if (strcmp(mode, "bookmark_enoent") == 0)
+			error = ENOENT;
+		else if (strcmp(mode, "bookmark_esrch") == 0)
+			error = ESRCH;
+		else if (strcmp(mode, "bookmark_batched_eio") == 0) {
+			error = EIO;
+			require_projected = B_TRUE;
+		} else if (strcmp(mode, "bookmark_batched_enoent") == 0) {
+			error = ENOENT;
+			require_projected = B_TRUE;
+		} else if (strcmp(mode, "bookmark_batched_esrch") == 0) {
+			error = ESRCH;
+			require_projected = B_TRUE;
+		}
+	}
 	if (error != 0) {
+		if (require_projected && !is_projected_bookmark_props(props)) {
+			write_marker("bookmark_not_batched");
+			return (EPROTO);
+		}
 		write_marker(mode);
 		return (error);
 	}
@@ -262,8 +300,19 @@ lzc_ioctl_fd(int fd, unsigned long request, zfs_cmd_t *zc)
 	static int enomem_injected;
 	static unsigned int batch_calls;
 	const char *mode = getenv("ZFS_SNAPSHOT_LIST_TEST_MODE");
+	const char *target = getenv("ZFS_SNAPSHOT_LIST_TEST_TARGET");
 	int error;
 	int injected_errno = 0;
+
+	if (request == ZFS_IOC_DATASET_LIST_NEXT && mode != NULL &&
+	    ((strcmp(mode, "dataset_eio") == 0 &&
+	    matches_target(zc->zc_name, target)) ||
+	    (strcmp(mode, "dataset_eio_after_batch") == 0 &&
+	    dataset_batch_seen))) {
+		write_marker(mode);
+		errno = EIO;
+		return (-1);
+	}
 
 	if (request == ZFS_IOC_SNAPSHOT_LIST_BATCH && mode != NULL) {
 		batch_calls++;
@@ -292,6 +341,9 @@ lzc_ioctl_fd(int fd, unsigned long request, zfs_cmd_t *zc)
 			injected_errno = ESRCH;
 		else if (strcmp(mode, "eintr") == 0)
 			injected_errno = EINTR;
+		else if (strcmp(mode, "child_snapshot_eio") == 0 &&
+		    target != NULL && strcmp(zc->zc_name, target) == 0)
+			injected_errno = EIO;
 
 		if (injected_errno != 0) {
 			write_marker(mode);
@@ -331,6 +383,13 @@ lzc_ioctl_fd(int fd, unsigned long request, zfs_cmd_t *zc)
 		return (-1);
 	}
 	error = next(fd, request, zc);
+	if (error == 0 && request == ZFS_IOC_SNAPSHOT_LIST_BATCH &&
+	    mode != NULL && strcmp(mode, "dataset_eio_after_batch") == 0 &&
+	    target != NULL && strcmp(zc->zc_name, target) == 0 &&
+	    !dataset_batch_seen) {
+		dataset_batch_seen = 1;
+		write_marker("dataset_eio_after_batch_batch");
+	}
 	if (error == 0 && request == ZFS_IOC_SNAPSHOT_LIST_BATCH &&
 	    mode != NULL && strcmp(mode, "empty_non_eof") == 0 &&
 	    !empty_batch_injected) {
