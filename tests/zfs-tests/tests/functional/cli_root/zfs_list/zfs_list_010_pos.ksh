@@ -96,7 +96,7 @@ function compare_projected_json_int
 	(( batch_calls > 1 )) || log_fail \
 	    "one-microsecond time budget did not split snapshot iteration"
 	log_must eval "zfs list -j --json-int -t '$object_types' -d 1 " \
-	    "-s available -o '$COLUMNS' '$dataset' > '$LEGACY_OUTPUT'"
+	    "-s quota -o '$COLUMNS' '$dataset' > '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 	log_must rm -f "$MARKER"
 }
@@ -114,7 +114,7 @@ function compare_locked_encrypted
 	    "'$ENCRYPTED_DATASET' > '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
 	log_must eval "zfs list -H -p -t snapshot " \
-	    "-o '$COLUMNS,available' '$ENCRYPTED_DATASET' | cut -f1-6 " \
+	    "-o '$COLUMNS,quota' '$ENCRYPTED_DATASET' | cut -f1-6 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 	log_must rm -f "$MARKER"
@@ -135,7 +135,7 @@ function compare_recursive_hybrid
 	    "'$MIXED_DATASET' > '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
 	log_must eval "zfs list -H -p -r -t '$object_types' " \
-	    "-o '$columns,available' '$MIXED_DATASET' | cut -f1-3 " \
+	    "-o '$columns,quota' '$MIXED_DATASET' | cut -f1-3 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 	log_must rm -f "$MARKER"
@@ -190,7 +190,7 @@ function compare_deferred_snapshot
 	    "'$DATASET' > '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
 	log_must eval "zfs list -H -p -t snapshot " \
-	    "-o '$COLUMNS,available' '$DATASET' | cut -f1-6 " \
+	    "-o '$COLUMNS,quota' '$DATASET' | cut -f1-6 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 
@@ -220,7 +220,7 @@ function compare_implicit_snapshots
 	    "zfs list -H -p -r -o '$columns' '$MIXED_DATASET' " \
 	    "> '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
-	log_must eval "zfs list -H -p -r -o '$columns,available' " \
+	log_must eval "zfs list -H -p -r -o '$columns,quota' " \
 	    "'$MIXED_DATASET' | cut -f1-3 > '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 
@@ -250,7 +250,7 @@ function compare_bookmark_only_mixed_type
 	    "'$MIXED_CHILD' > '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
 	log_must eval "zfs list -H -p -t snapshot,bookmark -d 1 " \
-	    "-o '$columns,available' '$MIXED_CHILD' | cut -f1-3 " \
+	    "-o '$columns,quota' '$MIXED_CHILD' | cut -f1-3 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 

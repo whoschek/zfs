@@ -60,26 +60,35 @@ function compare_full_stat
 	typeset dataset="$1"
 	typeset object_types="$2"
 	typeset property
+	typeset projected_columns="used,available,referenced,refer,mountpoint"
+	projected_columns="$projected_columns,logicalreferenced,lrefer,defer_destroy"
 
 	for property in createtxg creation guid name type userrefs; do
 		log_must eval "zfs list -H -p -t '$object_types' -d 1 " \
 		    "-s '$property' -o '$COLUMNS' '$dataset' > '$OUTPUT'"
 		log_must eval "zfs list -H -p -t '$object_types' -d 1 " \
-		    "-s '$property' -o '$COLUMNS,available' '$dataset' | " \
+		    "-s '$property' -o '$COLUMNS,quota' '$dataset' | " \
 		    "cut -f1-6 > '$LEGACY_OUTPUT'"
 		log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 	done
 
 	log_must eval "zfs list -j -p -t '$object_types' -d 1 " \
 	    "-o '$COLUMNS' '$dataset' > '$OUTPUT'"
-	log_must eval "zfs list -j -p -t '$object_types' -d 1 -s available " \
+	log_must eval "zfs list -j -p -t '$object_types' -d 1 -s quota " \
 	    "-o '$COLUMNS' '$dataset' > '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 
 	log_must eval "zfs list -t '$object_types' -d 1 -o '$COLUMNS' " \
 	    "'$dataset' > '$OUTPUT'"
-	log_must eval "zfs list -t '$object_types' -d 1 -s available " \
+	log_must eval "zfs list -t '$object_types' -d 1 -s quota " \
 	    "-o '$COLUMNS' '$dataset' > '$LEGACY_OUTPUT'"
+	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
+
+	log_must eval "zfs list -H -p -t '$object_types' -d 1 " \
+	    "-o '$projected_columns' '$dataset' > '$OUTPUT'"
+	log_must eval "zfs list -H -p -t '$object_types' -d 1 " \
+	    "-o '$projected_columns,quota' '$dataset' | cut -f1-8 " \
+	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 }
 
@@ -90,14 +99,14 @@ function compare_json_name
 
 	log_must eval "zfs list -j -p -t '$object_types' -d 1 -o name " \
 	    "'$dataset' > '$OUTPUT'"
-	log_must eval "zfs list -j -p -t '$object_types' -d 1 -s available " \
+	log_must eval "zfs list -j -p -t '$object_types' -d 1 -s quota " \
 	    "-o name '$dataset' > '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 
 	log_must eval "zfs list -j --json-int -t '$object_types' -d 1 " \
 	    "-o name '$dataset' > '$OUTPUT'"
 	log_must eval "zfs list -j --json-int -t '$object_types' -d 1 " \
-	    "-s available -o name '$dataset' > '$LEGACY_OUTPUT'"
+	    "-s quota -o name '$dataset' > '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 }
 
@@ -120,7 +129,7 @@ function compare_order
 	log_must eval "zfs list -H -p -t '$types' -o name $sort_options " \
 	    "'$SUBSET_DATASET' > '$OUTPUT'"
 	log_must diff "$EXPECTED_OUTPUT" "$OUTPUT"
-	log_must eval "zfs list -H -p -t '$types' -o name,available " \
+	log_must eval "zfs list -H -p -t '$types' -o name,quota " \
 	    "$sort_options '$SUBSET_DATASET' | cut -f1 > '$LEGACY_OUTPUT'"
 	log_must diff "$EXPECTED_OUTPUT" "$LEGACY_OUTPUT"
 }
@@ -133,7 +142,7 @@ function compare_subset
 	log_must eval "zfs list -H -p -t snapshot,bookmark -d 1 " \
 	    "-o '$columns' '$SUBSET_DATASET' > '$OUTPUT'"
 	log_must eval "zfs list -H -p -t snapshot,bookmark -d 1 " \
-	    "-o '$columns,available' '$SUBSET_DATASET' | " \
+	    "-o '$columns,quota' '$SUBSET_DATASET' | " \
 	    "cut -f1-$field_count > '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 }
@@ -203,7 +212,7 @@ verify_count 1025
 
 log_must eval "zfs list -H -p -t snapshot -o '$COLUMNS' " \
     "'$BOUNDARY_DATASET' > '$OUTPUT'"
-log_must eval "zfs list -H -p -t snapshot -o '$COLUMNS,available' " \
+log_must eval "zfs list -H -p -t snapshot -o '$COLUMNS,quota' " \
     "'$BOUNDARY_DATASET' | cut -f1-6 > '$LEGACY_OUTPUT'"
 log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 

@@ -229,6 +229,18 @@ is_projected_bookmark_props(nvlist_t *props)
 	    nvlist_exists(props, zfs_prop_to_name(ZFS_PROP_CREATION)));
 }
 
+static boolean_t
+is_default_projected_bookmark_props(nvlist_t *props)
+{
+	nvpair_t *pair = NULL;
+	unsigned int count = 0;
+
+	while ((pair = nvlist_next_nvpair(props, pair)) != NULL)
+		count++;
+	return (count == 1 &&
+	    nvlist_exists(props, zfs_prop_to_name(ZFS_PROP_REFERENCED)));
+}
+
 int
 lzc_get_bookmarks(const char *fsname, nvlist_t *props, nvlist_t **bmarks)
 {
@@ -263,6 +275,14 @@ lzc_get_bookmarks(const char *fsname, nvlist_t *props, nvlist_t **bmarks)
 		}
 		write_marker(mode);
 		return (error);
+	}
+	if (mode != NULL && strcmp(mode, "bookmark_projected") == 0 &&
+	    matches_target(fsname, target)) {
+		if (!is_default_projected_bookmark_props(props)) {
+			write_marker("bookmark_not_projected");
+			return (EPROTO);
+		}
+		write_marker(mode);
 	}
 
 	if (next == NULL)

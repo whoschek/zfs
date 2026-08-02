@@ -578,6 +578,10 @@ test_snapshot_list_batch(const char *dataset)
 	fnvlist_add_boolean(props, "inconsistent");
 	fnvlist_add_boolean(props, "numclones");
 	fnvlist_add_boolean(props, "redacted");
+	fnvlist_add_boolean(props, "used");
+	fnvlist_add_boolean(props, "referenced");
+	fnvlist_add_boolean(props, "logicalreferenced");
+	fnvlist_add_boolean(props, "defer_destroy");
 	fnvlist_add_boolean(props, "userrefs");
 	fnvlist_add_nvlist(required, SNAP_ITER_BATCH_PROPS, props);
 

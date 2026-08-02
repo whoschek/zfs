@@ -58,7 +58,7 @@ callbacks=$(wc -l < "$FILTER_OUTPUT")
     log_fail "direct iteration delivered $callbacks callbacks; expected 1025"
 # Sorting preserves duplicate names, so this compares the callback multisets.
 log_must eval "sort '$FILTER_OUTPUT' > '$BATCH_OUTPUT'"
-log_must eval "zfs list -H -p -t snapshot -o name,available " \
+log_must eval "zfs list -H -p -t snapshot -o name,quota " \
     "'$BOUNDARY_DATASET' | cut -f1 | sort > '$EXPECTED_OUTPUT'"
 log_must diff "$EXPECTED_OUTPUT" "$BATCH_OUTPUT"
 
