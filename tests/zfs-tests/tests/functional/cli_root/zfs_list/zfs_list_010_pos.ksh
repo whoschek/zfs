@@ -38,7 +38,7 @@ BATCH_OUTPUT="$TEST_BASE_DIR/projected_list_batch.$$"
 LEGACY_OUTPUT="$TEST_BASE_DIR/projected_list_legacy.$$"
 EXPECTED_OUTPUT="$TEST_BASE_DIR/projected_list_expected.$$"
 MARKER="$TEST_BASE_DIR/projected_list_marker.$$"
-COLUMNS="createtxg,creation,guid,name,type,userrefs"
+COLUMNS="createtxg,creation,guid,name,written,type,userrefs"
 HOLD_TAG="projected-list"
 DEFERRED_HOLD_TAG="projected-list-deferred"
 ENCRYPTED_HOLD_TAG="projected-list-encrypted"
@@ -114,7 +114,7 @@ function compare_locked_encrypted
 	    "'$ENCRYPTED_DATASET' > '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
 	log_must eval "zfs list -H -p -t snapshot " \
-	    "-o '$COLUMNS,quota' '$ENCRYPTED_DATASET' | cut -f1-6 " \
+	    "-o '$COLUMNS,quota' '$ENCRYPTED_DATASET' | cut -f1-7 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 	log_must rm -f "$MARKER"
@@ -190,7 +190,7 @@ function compare_deferred_snapshot
 	    "'$DATASET' > '$BATCH_OUTPUT'"
 	log_must grep -Fx count "$MARKER"
 	log_must eval "zfs list -H -p -t snapshot " \
-	    "-o '$COLUMNS,quota' '$DATASET' | cut -f1-6 " \
+	    "-o '$COLUMNS,quota' '$DATASET' | cut -f1-7 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$BATCH_OUTPUT"
 
@@ -199,7 +199,7 @@ function compare_deferred_snapshot
 	(( matches == 1 )) || log_fail \
 	    "deferred-destroy snapshot appeared $matches times; expected once"
 	userrefs=$(awk -F '\t' -v target="$DATASET@deferred" \
-	    '$4 == target { print $6 }' "$BATCH_OUTPUT")
+	    '$4 == target { print $7 }' "$BATCH_OUTPUT")
 	[[ "$userrefs" == "1" ]] || log_fail \
 	    "deferred-destroy snapshot has userrefs=$userrefs; expected 1"
 	log_must rm -f "$MARKER"

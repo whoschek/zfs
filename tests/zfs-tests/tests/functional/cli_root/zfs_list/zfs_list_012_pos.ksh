@@ -15,7 +15,7 @@
 #    automatic legacy fallback.
 # 3. Verify creation-TXG filters survive automatic legacy fallback.
 # 4. Reject a projected property and verify automatic legacy fallback.
-# 5. Verify written and -o all bypass projected listing.
+# 5. Verify written uses projected listing and -o all bypasses it.
 # 6. Exercise projected numeric values used only as sort keys.
 # 7. Exercise the same error paths with all projected columns and name alone.
 # 8. Verify callback values which collide with special ioctl errors are
@@ -32,9 +32,11 @@
 # 16. Preserve bookmark iterator errors.
 # 17. Reuse stale parent names with different dataset types and encryption
 #     states, and require projected handles to describe the replacements.
-# 18. Reject missing or invalid projected parent metadata with EPROTO.
+# 18. Reject missing or invalid projected parent and written metadata with
+#     EPROTO.
 # 19. Project cheap snapshot properties in batches, including aliases,
-#     nonzero clone counts, and deferred destroy, and preserve fallback.
+#     written bytes, nonzero clone counts, and deferred destroy, and preserve
+#     fallback.
 # 20. Read redacted state from a real redacted receive snapshot.
 # 21. Use projected listing for default snapshot and bookmark columns.
 # 22. Use full snapshot properties when coloring the available column.
@@ -58,7 +60,7 @@ INJECTED_OUTPUT="$TEST_BASE_DIR/projected_stress_injected.$$"
 EXPECTED_OUTPUT="$TEST_BASE_DIR/projected_stress_expected.$$"
 MARKER="$TEST_BASE_DIR/projected_stress_marker.$$"
 KEY_FILE="$TEST_BASE_DIR/projected_stress_key.$$"
-COLUMNS="createtxg,creation,guid,name,type,userrefs"
+COLUMNS="createtxg,creation,guid,name,written,type,userrefs"
 HOLD_TAG_ONE="projected-stress-one"
 HOLD_TAG_TWO="projected-stress-two"
 
@@ -119,33 +121,35 @@ function run_injected_list
 	log_must rm -f "$MARKER"
 }
 
-function verify_written_uses_legacy
+function verify_projected_written
 {
 	typeset preload="$SHIM"
 
 	[[ -n "$LD_PRELOAD" ]] && preload="$SHIM:$LD_PRELOAD"
 	log_must rm -f "$MARKER"
-	log_must eval "zfs list -H -p -t snapshot -o name,written " \
-	    "'$DATASET' > '$EXPECTED_OUTPUT'"
+	log_must eval "zfs list -H -p -t snapshot -o name,written,quota " \
+	    "'$DATASET' | cut -f1-2 > '$EXPECTED_OUTPUT'"
 	log_must eval "LD_PRELOAD='$preload' " \
 	    "ZFS_SNAPSHOT_LIST_TEST_MODE='count' " \
 	    "ZFS_SNAPSHOT_LIST_TEST_MARKER='$MARKER' " \
 	    "zfs list -H -p -t snapshot -o name,written '$DATASET' " \
 	    "> '$INJECTED_OUTPUT'"
+	log_must grep -Fx count "$MARKER"
 	log_must diff "$EXPECTED_OUTPUT" "$INJECTED_OUTPUT"
-	[[ ! -e "$MARKER" ]] ||
-	    log_fail "displaying written used projected listing"
+	log_must rm -f "$MARKER"
 
-	log_must eval "zfs list -H -p -t snapshot -o name -s written " \
-	    "'$DATASET' > '$EXPECTED_OUTPUT'"
-	log_must eval "LD_PRELOAD='$preload' " \
-	    "ZFS_SNAPSHOT_LIST_TEST_MODE='count' " \
-	    "ZFS_SNAPSHOT_LIST_TEST_MARKER='$MARKER' " \
-	    "zfs list -H -p -t snapshot -o name -s written '$DATASET' " \
-	    "> '$INJECTED_OUTPUT'"
-	log_must diff "$EXPECTED_OUTPUT" "$INJECTED_OUTPUT"
-	[[ ! -e "$MARKER" ]] ||
-	    log_fail "sorting by written used projected listing"
+	for sort_options in "-s written" "-S written"; do
+		log_must eval "zfs list -H -p -t snapshot -o name,quota " \
+		    "$sort_options '$DATASET' | cut -f1 > '$EXPECTED_OUTPUT'"
+		log_must eval "LD_PRELOAD='$preload' " \
+		    "ZFS_SNAPSHOT_LIST_TEST_MODE='count' " \
+		    "ZFS_SNAPSHOT_LIST_TEST_MARKER='$MARKER' " \
+		    "zfs list -H -p -t snapshot -o name $sort_options " \
+		    "'$DATASET' > '$INJECTED_OUTPUT'"
+		log_must grep -Fx count "$MARKER"
+		log_must diff "$EXPECTED_OUTPUT" "$INJECTED_OUTPUT"
+		log_must rm -f "$MARKER"
+	done
 }
 
 function verify_all_uses_legacy
@@ -221,7 +225,8 @@ function run_injected_metadata_errors
 
 	[[ -n "$LD_PRELOAD" ]] && preload="$SHIM:$LD_PRELOAD"
 	for mode in missing_dmu_type invalid_dmu_type missing_dds_flags \
-	    invalid_dds_flags; do
+	    invalid_dds_flags missing_writtens missing_written_valid \
+	    short_writtens short_written_valid invalid_written_valid; do
 		log_must rm -f "$MARKER"
 		log_must eval "LD_PRELOAD='$preload' " \
 		    "ZFS_SNAPSHOT_LIST_TEST_MODE='$mode' " \
@@ -449,10 +454,10 @@ function verify_projected_property_union
 	typeset property
 	typeset numclones
 	columns="$columns,logicalreferenced,lrefer,defer_destroy,numclones"
-	columns="$columns,inconsistent,redacted,origin"
+	columns="$columns,inconsistent,redacted,origin,written"
 
 	log_must eval "zfs list -H -p -t snapshot " \
-	    "-o '$columns,quota' '$DATASET' | cut -f1-13 " \
+	    "-o '$columns,quota' '$DATASET' | cut -f1-14 " \
 	    "> '$EXPECTED_OUTPUT'"
 	run_injected_list count "$INJECTED_OUTPUT" "$columns" \
 	    "$EXPECTED_OUTPUT"
@@ -461,7 +466,7 @@ function verify_projected_property_union
 
 	for property in used available referenced refer mountpoint \
 	    logicalreferenced lrefer defer_destroy numclones inconsistent \
-	    redacted origin; do
+	    redacted origin written; do
 		log_must eval "zfs list -H -p -t snapshot " \
 		    "-s '$property' -o name,quota '$DATASET' | " \
 		    "cut -f1 > '$EXPECTED_OUTPUT'"
@@ -574,7 +579,7 @@ snapexists "$DATASET@bookmark_source" && \
     log_fail "bookmark source snapshot still exists"
 verify_stale_bookmark_handles
 verify_stale_snapshot_metadata
-verify_written_uses_legacy
+verify_projected_written
 verify_all_uses_legacy
 run_injected_bookmark_errors
 verify_projected_userrefs

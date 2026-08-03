@@ -16,7 +16,8 @@
 # 3. Verify maximum-length snapshot and bookmark names.
 # 4. Verify default, tied, explicit-name, and mixed-type ordering, including
 #    implicit depth for combined snapshot and bookmark listings.
-# 5. Compare all 63 nonempty subsets of six common properties with full stats.
+# 5. Compare all 127 nonempty subsets of seven common properties with full
+#    stats.
 # 6. List snapshots while another process creates, renames, and destroys one.
 #
 
@@ -35,8 +36,8 @@ OUTPUT="$TEST_BASE_DIR/list_generic_output.$$"
 LEGACY_OUTPUT="$TEST_BASE_DIR/list_generic_legacy.$$"
 EXPECTED_OUTPUT="$TEST_BASE_DIR/list_generic_expected.$$"
 RACE_LOG="$TEST_BASE_DIR/list_generic_race.$$"
-COLUMNS="createtxg,creation,guid,name,type,userrefs"
-PROPERTIES="createtxg creation guid name type userrefs"
+COLUMNS="createtxg,creation,guid,name,written,type,userrefs"
+PROPERTIES="createtxg creation guid name written type userrefs"
 HOLD_TAG="list-generic"
 race_pid=""
 
@@ -63,12 +64,12 @@ function compare_full_stat
 	typeset projected_columns="used,available,referenced,refer,mountpoint"
 	projected_columns="$projected_columns,logicalreferenced,lrefer,defer_destroy"
 
-	for property in createtxg creation guid name type userrefs; do
+	for property in createtxg creation guid name written type userrefs; do
 		log_must eval "zfs list -H -p -t '$object_types' -d 1 " \
 		    "-s '$property' -o '$COLUMNS' '$dataset' > '$OUTPUT'"
 		log_must eval "zfs list -H -p -t '$object_types' -d 1 " \
 		    "-s '$property' -o '$COLUMNS,quota' '$dataset' | " \
-		    "cut -f1-6 > '$LEGACY_OUTPUT'"
+		    "cut -f1-7 > '$LEGACY_OUTPUT'"
 		log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 	done
 
@@ -90,6 +91,21 @@ function compare_full_stat
 	    "-o '$projected_columns,quota' '$dataset' | cut -f1-8 " \
 	    "> '$LEGACY_OUTPUT'"
 	log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
+}
+
+function compare_written
+{
+	typeset dataset="$1"
+	typeset sort_options
+
+	for sort_options in "" "-s written" "-S written"; do
+		log_must eval "zfs list -H -p -t snapshot -o name,written " \
+		    "$sort_options '$dataset' > '$OUTPUT'"
+		log_must eval "zfs list -H -p -t snapshot " \
+		    "-o name,written,quota $sort_options '$dataset' | " \
+		    "cut -f1-2 > '$LEGACY_OUTPUT'"
+		log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
+	done
 }
 
 function compare_json_name
@@ -159,6 +175,20 @@ log_must file_write -o append -f "$DATASET_MOUNT/payload" \
 log_must zfs snapshot "$DATASET@after_append"
 log_must rm "$DATASET_MOUNT/payload"
 log_must zfs snapshot "$DATASET@after_remove"
+log_must file_write -o create -f "$DATASET_MOUNT/merge_payload" \
+    -b 131072 -c 4 -d R
+log_must zfs snapshot "$DATASET@written_before"
+log_must file_write -o append -f "$DATASET_MOUNT/merge_payload" \
+    -b 131072 -c 4 -d R
+log_must zfs snapshot "$DATASET@written_middle"
+log_must file_write -o append -f "$DATASET_MOUNT/merge_payload" \
+    -b 131072 -c 4 -d R
+log_must zfs snapshot "$DATASET@written_after"
+compare_written "$DATASET"
+log_must zfs destroy "$DATASET@written_middle"
+snapexists "$DATASET@written_middle" && \
+    log_fail "middle snapshot still exists after destruction"
+compare_written "$DATASET"
 log_must zfs hold "$HOLD_TAG" "$DATASET@after_append"
 log_must zfs bookmark "$DATASET@base" "$DATASET#base"
 log_must zfs bookmark "$DATASET@after_append" "$DATASET#after_append"
@@ -213,7 +243,7 @@ verify_count 1025
 log_must eval "zfs list -H -p -t snapshot -o '$COLUMNS' " \
     "'$BOUNDARY_DATASET' > '$OUTPUT'"
 log_must eval "zfs list -H -p -t snapshot -o '$COLUMNS,quota' " \
-    "'$BOUNDARY_DATASET' | cut -f1-6 > '$LEGACY_OUTPUT'"
+    "'$BOUNDARY_DATASET' | cut -f1-7 > '$LEGACY_OUTPUT'"
 log_must diff "$LEGACY_OUTPUT" "$OUTPUT"
 
 log_must zfs create "$MAX_DATASET"
@@ -283,11 +313,11 @@ compare_order snapshot,bookmark "-d 1"
 set -A property_array $PROPERTIES
 typeset -i mask property_index field_count
 typeset columns separator
-for (( mask = 1; mask < 64; mask += 1 )); do
+for (( mask = 1; mask < 128; mask += 1 )); do
 	columns=""
 	separator=""
 	field_count=0
-	for (( property_index = 0; property_index < 6; property_index += 1 )); do
+	for (( property_index = 0; property_index < 7; property_index += 1 )); do
 		if (( mask & (1 << property_index) )); then
 			columns="${columns}${separator}${property_array[property_index]}"
 			separator=","
