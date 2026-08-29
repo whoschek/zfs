@@ -226,6 +226,7 @@ zfs_do_snapshot_list_batch_ioctl(zfs_handle_t *zhp, int flags,
 		fnvlist_add_uint64(args, SNAP_ITER_MIN_TXG, min_txg);
 	if (max_txg != 0)
 		fnvlist_add_uint64(args, SNAP_ITER_MAX_TXG, max_txg);
+	fnvlist_add_boolean(props, zfs_prop_to_name(ZFS_PROP_NAME));
 	if (flags & ZFS_ITER_BATCHED_CREATETXG) {
 		fnvlist_add_boolean(props,
 		    zfs_prop_to_name(ZFS_PROP_CREATETXG));
@@ -400,7 +401,8 @@ zfs_iter_snapshots_batch(zfs_handle_t *zhp, int flags, zfs_iter_f func,
 			count = 0;
 			ret = 0;
 		} else if (ret != 0 || nvlist_lookup_string_array(results,
-		    zfs_prop_to_name(ZFS_PROP_NAME), &names, &count) != 0) {
+		    zfs_prop_to_name(ZFS_PROP_NAME), &names, &count) != 0 ||
+		    count == 0) {
 			ret = EPROTO;
 			goto malformed;
 		}

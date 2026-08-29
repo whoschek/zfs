@@ -2760,18 +2760,32 @@ uint_t zfs_snapshot_list_batch_time_us =
 
 /*
  * innvl: {
- *     (optional uint64) cursor
- *     (optional uint64) minimum creation txg
- *     (optional uint64) maximum creation txg
- *     (uint64) maximum number of returned snapshots
- *     (nvlist) requested properties, each named entry is a boolean
+ *     SNAP_ITER_BATCH_CURSOR: optional uint64; cursor
+ *     SNAP_ITER_MIN_TXG: optional uint64; minimum creation txg filter
+ *     SNAP_ITER_MAX_TXG: optional uint64; maximum creation txg filter
+ *     SNAP_ITER_BATCH_MAX_RESULTS: uint64; max num snapshots to return
+ *     SNAP_ITER_BATCH_PROPS: nvlist; requested snapshot properties;
+ *         each entry is a boolean named with a requested property name
  * }
  *
- * outnvl contains authoritative parent metadata, an always-present EOF boolean
- * value, and, for nonempty batches, a results nvlist containing snapshot names
- * and one parallel array for each requested property.  Result-count and
- * elapsed-time limits amortize parent objset and ioctl overhead without holding
- * the pool configuration lock for an unbounded snapshot walk.
+ * outnvl: {
+ *     SNAP_ITER_BATCH_CURSOR: uint64 [opaque]
+ *     SNAP_ITER_BATCH_DMU_TYPE: uint64; up-to-date metadata
+ *     SNAP_ITER_BATCH_DDS_FLAGS: uint64; up-to-date metadata
+ *     SNAP_ITER_BATCH_EOF: boolean; potentially more results available?
+ *     SNAP_ITER_BATCH_RESULTS: optional nvlist w/ zero or more columns
+ *        column: array of T where T is string, uint64, uint8, etc.
+ *        e.g. name, createtxg, guid, written, written_valid, etc
+ * }
+ *
+ * outnvl contains authoritative parent metadata, an always-present EOF
+ * boolean value, and, for nonempty batches with at least one requested
+ * property, a results nvlist containing one parallel array for each
+ * requested property.
+ *
+ * Result-count and elapsed-time limits amortize parent objset and ioctl
+ * overhead without holding the pool configuration lock for an unbounded
+ * snapshot walk.
  */
 static const zfs_ioc_key_t zfs_keys_snapshot_list_batch[] = {
 	{SNAP_ITER_BATCH_PROPS, DATA_TYPE_NVLIST, 0},
@@ -2785,8 +2799,8 @@ static int
 zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
     nvlist_t *outnvl)
 {
-	char **names;
-	char *name_storage;
+	char **names = NULL;
+	char *name_storage = NULL;
 	uint64_t *createtxgs = NULL, *guids = NULL, *objsetids = NULL;
 	uint64_t *creations = NULL;
 	uint64_t *userrefs = NULL, *numclones = NULL, *used = NULL;
@@ -2801,6 +2815,7 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 	uint_t count = 0;
 	hrtime_t start_time, time_budget;
 	boolean_t eof = B_FALSE;
+	boolean_t want_name = B_FALSE;
 	boolean_t want_createtxg = B_FALSE, want_creation = B_FALSE;
 	boolean_t want_guid = B_FALSE, want_objsetid = B_FALSE;
 	boolean_t want_userrefs = B_FALSE;
@@ -2827,6 +2842,9 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 			return (SET_ERROR(ZFS_ERR_IOC_ARG_BADTYPE));
 
 		switch (zfs_name_to_prop(nvpair_name(pair))) {
+		case ZFS_PROP_NAME:
+			want_name = B_TRUE;
+			break;
 		case ZFS_PROP_CREATETXG:
 			want_createtxg = B_TRUE;
 			break;
@@ -2875,11 +2893,13 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 	(void) nvlist_lookup_uint64(innvl, SNAP_ITER_MIN_TXG, &min_txg);
 	(void) nvlist_lookup_uint64(innvl, SNAP_ITER_MAX_TXG, &max_txg);
 
-	names = kmem_alloc(sizeof (names[0]) * batch_size, KM_SLEEP);
-	name_storage = vmem_alloc(ZFS_MAX_DATASET_NAME_LEN * batch_size,
-	    KM_SLEEP);
-	for (uint_t i = 0; i < batch_size; i++)
-		names[i] = name_storage + ZFS_MAX_DATASET_NAME_LEN * i;
+	if (want_name) {
+		names = kmem_alloc(sizeof (names[0]) * batch_size, KM_SLEEP);
+		name_storage = vmem_alloc(ZFS_MAX_DATASET_NAME_LEN * batch_size,
+		    KM_SLEEP);
+		for (uint_t i = 0; i < batch_size; i++)
+			names[i] = name_storage + ZFS_MAX_DATASET_NAME_LEN * i;
+	}
 	if (want_createtxg) {
 		createtxgs = kmem_alloc(sizeof (createtxgs[0]) * batch_size,
 		    KM_SLEEP);
@@ -2979,8 +2999,10 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 		txg = stats.dss_creation_txg;
 		if ((min_txg == 0 || txg >= min_txg) &&
 		    (max_txg == 0 || txg <= max_txg)) {
-			(void) strlcpy(names[count], snapname,
-			    ZFS_MAX_DATASET_NAME_LEN);
+			if (want_name) {
+				(void) strlcpy(names[count], snapname,
+				    ZFS_MAX_DATASET_NAME_LEN);
+			}
 			if (want_createtxg)
 				createtxgs[count] = txg;
 			if (want_guid)
@@ -3031,7 +3053,7 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 		fnvlist_add_uint64(outnvl, SNAP_ITER_BATCH_DDS_FLAGS,
 		    head_flags);
 		fnvlist_add_boolean_value(outnvl, SNAP_ITER_BATCH_EOF, eof);
-		if (count != 0) {
+		if (count != 0 && !nvlist_empty(props)) {
 			nvlist_t *empty_results = fnvlist_alloc();
 			nvlist_t *results;
 
@@ -3044,9 +3066,11 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 			fnvlist_free(empty_results);
 			results = fnvlist_lookup_nvlist(outnvl,
 			    SNAP_ITER_BATCH_RESULTS);
-			fnvlist_add_string_array(results,
-			    zfs_prop_to_name(ZFS_PROP_NAME),
-			    (const char * const *)names, count);
+			if (want_name) {
+				fnvlist_add_string_array(results,
+				    zfs_prop_to_name(ZFS_PROP_NAME),
+				    (const char * const *)names, count);
+			}
 			if (want_createtxg) {
 				fnvlist_add_uint64_array(results,
 				    zfs_prop_to_name(ZFS_PROP_CREATETXG),
@@ -3122,8 +3146,11 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 out:
 	if (os != NULL)
 		dmu_objset_rele(os, FTAG);
-	vmem_free(name_storage, ZFS_MAX_DATASET_NAME_LEN * batch_size);
-	kmem_free(names, sizeof (names[0]) * batch_size);
+	if (want_name) {
+		vmem_free(name_storage,
+		    ZFS_MAX_DATASET_NAME_LEN * batch_size);
+		kmem_free(names, sizeof (names[0]) * batch_size);
+	}
 	if (want_createtxg) {
 		kmem_free(createtxgs, sizeof (createtxgs[0]) * batch_size);
 	}
