@@ -542,6 +542,48 @@ dsl_dataset_snap_lookup(dsl_dataset_t *ds, const char *name, uint64_t *value)
 	return (err);
 }
 
+/*
+ * Read one entry from a previously resolved snapshot name map.  The pool
+ * configuration lock stabilizes the map for the cursor's lifetime.  A failed
+ * cursor initialization or retrieval terminates iteration with ENOENT.
+ */
+int
+dsl_dataset_snap_list_next(dsl_pool_t *dp, uint64_t snapnames_zapobj,
+    int namelen, char *name, uint64_t *idp, uint64_t *offp,
+    boolean_t *case_conflict)
+{
+	zap_cursor_t cursor = { 0 };
+	zap_attribute_t *attr;
+	int error;
+
+	ASSERT(dsl_pool_config_held(dp));
+
+	if (snapnames_zapobj == 0)
+		return (SET_ERROR(ENOENT));
+
+	attr = zap_attribute_alloc();
+	error = zap_cursor_init_serialized(&cursor, dp->dp_meta_objset,
+	    snapnames_zapobj, *offp);
+	if (error == 0)
+		error = zap_cursor_retrieve(&cursor, attr);
+	if (error != 0) {
+		error = SET_ERROR(ENOENT);
+	} else if (strlen(attr->za_name) + 1 > namelen) {
+		error = SET_ERROR(ENAMETOOLONG);
+	} else {
+		(void) strlcpy(name, attr->za_name, namelen);
+		if (idp != NULL)
+			*idp = attr->za_first_integer;
+		if (case_conflict != NULL)
+			*case_conflict = attr->za_normalization_conflict;
+		zap_cursor_advance(&cursor);
+		*offp = zap_cursor_serialize(&cursor);
+	}
+	zap_cursor_fini(&cursor);
+	zap_attribute_free(attr);
+	return (error);
+}
+
 int
 dsl_dataset_snap_remove(dsl_dataset_t *ds, const char *name, dmu_tx_t *tx,
     boolean_t adj_cnt)
@@ -2778,6 +2820,7 @@ dsl_dataset_snapshot_written(dsl_pool_t *dp,
 int
 dsl_dataset_snapshot_stats(dsl_pool_t *dp, uint64_t dsobj,
     boolean_t want_userrefs, boolean_t want_redacted, boolean_t want_written,
+    boolean_t want_type, boolean_t encrypted,
     uint64_t min_txg, uint64_t max_txg, dsl_dataset_snapshot_stats_t *stats)
 {
 	objset_t *mos = dp->dp_meta_objset;
@@ -2838,6 +2881,22 @@ dsl_dataset_snapshot_stats(dsl_pool_t *dp, uint64_t dsobj,
 	if (error == 0 && want_written) {
 		error = dsl_dataset_snapshot_written(dp, dsp, min_txg, max_txg,
 		    &stats->dss_written, &stats->dss_written_valid);
+	}
+	if (error == 0 && want_type && dsp->ds_num_children != 0 &&
+	    (min_txg == 0 || dsp->ds_creation_txg >= min_txg) &&
+	    (max_txg == 0 || dsp->ds_creation_txg <= max_txg)) {
+		dmu_objset_type_t type;
+
+		/*
+		 * Snapshot roots are immutable, so they need no ds_bp_rwlock.
+		 * A dataset's objset type is invariant across its snapshots.
+		 * Failure to read the optional type does not invalidate the
+		 * snapshot stats; leave dss_type as DMU_OST_NONE so the caller
+		 * can retry or open the current head.
+		 */
+		if (dmu_objset_type_from_bp(dp->dp_spa, dsobj, &dsp->ds_bp,
+		    encrypted, &type) == 0)
+			stats->dss_type = type;
 	}
 
 out:

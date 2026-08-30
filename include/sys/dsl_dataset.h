@@ -398,6 +398,9 @@ void dsl_dataset_block_remapped(dsl_dataset_t *ds, uint64_t vdev,
     uint64_t offset, uint64_t size, uint64_t birth, dmu_tx_t *tx);
 int dsl_dataset_snap_lookup(dsl_dataset_t *ds, const char *name,
     uint64_t *value);
+int dsl_dataset_snap_list_next(struct dsl_pool *dp,
+    uint64_t snapnames_zapobj, int namelen, char *name, uint64_t *idp,
+    uint64_t *offp, boolean_t *case_conflict);
 
 void dsl_dataset_dirty(dsl_dataset_t *ds, dmu_tx_t *tx);
 
@@ -433,6 +436,7 @@ typedef struct dsl_dataset_snapshot_stats {
 	uint64_t dss_referenced;
 	uint64_t dss_logicalreferenced;
 	uint64_t dss_written;
+	dmu_objset_type_t dss_type;
 	uint8_t dss_inconsistent;
 	uint8_t dss_redacted;
 	uint8_t dss_defer_destroy;
@@ -441,6 +445,7 @@ typedef struct dsl_dataset_snapshot_stats {
 
 int dsl_dataset_snapshot_stats(struct dsl_pool *dp, uint64_t dsobj,
     boolean_t want_userrefs, boolean_t want_redacted, boolean_t want_written,
+    boolean_t want_type, boolean_t encrypted,
     uint64_t min_txg, uint64_t max_txg, dsl_dataset_snapshot_stats_t *stats);
 int dsl_get_prev_snap(dsl_dataset_t *ds, char *snap);
 void dsl_get_redact_snaps(dsl_dataset_t *ds, nvlist_t *propval);

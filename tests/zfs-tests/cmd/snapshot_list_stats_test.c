@@ -79,7 +79,7 @@ check_snapshot_stats(dsl_pool_t *dp, uint64_t dsobj, const char *description,
 	fault_object = injected_object;
 	fault_reached = B_FALSE;
 	error = dsl_dataset_snapshot_stats(dp, dsobj, B_FALSE, B_FALSE,
-	    B_TRUE, min_txg, max_txg, &stats);
+	    B_TRUE, B_FALSE, B_FALSE, min_txg, max_txg, &stats);
 	fault_objset = NULL;
 	fault_object = 0;
 	injected = fault_reached;
