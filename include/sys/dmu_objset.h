@@ -215,6 +215,11 @@ void dmu_objset_rele(objset_t *os, const void *tag);
 void dmu_objset_rele_flags(objset_t *os, boolean_t decrypt, const void *tag);
 void dmu_objset_disown(objset_t *os, boolean_t decrypt, const void *tag);
 int dmu_objset_from_ds(struct dsl_dataset *ds, objset_t **osp);
+int dmu_objset_type_from_bp(spa_t *spa, uint64_t dsobj, const blkptr_t *bp,
+    boolean_t encrypted, dmu_objset_type_t *typep);
+int dmu_snapshot_list_next_impl(struct dsl_pool *dp,
+    uint64_t snapnames_zapobj, int namelen, char *name, uint64_t *idp,
+    uint64_t *offp, boolean_t *case_conflict);
 
 void dmu_objset_stats(objset_t *os, nvlist_t *nv);
 void dmu_objset_fast_stat(objset_t *os, dmu_objset_stats_t *stat);

@@ -2778,6 +2778,7 @@ dsl_dataset_snapshot_written(dsl_pool_t *dp,
 int
 dsl_dataset_snapshot_stats(dsl_pool_t *dp, uint64_t dsobj,
     boolean_t want_userrefs, boolean_t want_redacted, boolean_t want_written,
+    boolean_t want_type, boolean_t encrypted,
     uint64_t min_txg, uint64_t max_txg, dsl_dataset_snapshot_stats_t *stats)
 {
 	objset_t *mos = dp->dp_meta_objset;
@@ -2838,6 +2839,23 @@ dsl_dataset_snapshot_stats(dsl_pool_t *dp, uint64_t dsobj,
 	if (error == 0 && want_written) {
 		error = dsl_dataset_snapshot_written(dp, dsp, min_txg, max_txg,
 		    &stats->dss_written, &stats->dss_written_valid);
+	}
+	if (error == 0 && want_type && dsp->ds_num_children != 0 &&
+	    (min_txg == 0 || dsp->ds_creation_txg >= min_txg) &&
+	    (max_txg == 0 || dsp->ds_creation_txg <= max_txg)) {
+		dmu_objset_type_t type;
+
+		/*
+		 * Snapshot roots are immutable, so they need no ds_bp_rwlock.
+		 * A dataset's objset type is invariant across its snapshots.
+		 * Failure to read the optional type does not invalidate the
+		 * snapshot stats; leave dss_type as DMU_OST_NONE so the caller
+		 * can retry or open the current head.
+		 */
+		stats->dss_type = DMU_OST_NONE;
+		if (dmu_objset_type_from_bp(dp->dp_spa, dsobj, &dsp->ds_bp,
+		    encrypted, &type) == 0)
+			stats->dss_type = type;
 	}
 
 out:

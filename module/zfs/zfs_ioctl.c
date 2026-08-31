@@ -2753,6 +2753,74 @@ top:
 	return (error);
 }
 
+/*
+ * Resolve the snapshot-name map and encryption state without opening the
+ * dataset's objset.  The caller's pool configuration hold stabilizes the
+ * dsl_dir, its head dataset link, the snapshot map, and encryption state.
+ * A dataset's objset encryption state is invariant across its snapshots.
+ */
+static int
+zfs_snapshot_list_snapnames(dsl_pool_t *dp, const char *name,
+    uint64_t *snapnames_zapobjp, boolean_t *encryptedp)
+{
+	objset_t *mos = dp->dp_meta_objset;
+	dsl_dir_t *dd = NULL;
+	dmu_buf_t *dbuf = NULL;
+	dmu_object_info_t doi;
+	const dsl_dataset_phys_t *dsp;
+	const char *tail;
+	uint64_t dsobj;
+	int error;
+
+	ASSERT(dsl_pool_config_held(dp));
+
+	error = dsl_dir_hold(dp, name, FTAG, &dd, &tail);
+	if (error != 0)
+		return (error);
+	if (tail != NULL) {
+		dsl_dataset_t *ds;
+
+		dsl_dir_rele(dd, FTAG);
+		error = dsl_dataset_hold(dp, name, FTAG, &ds);
+		if (error == 0) {
+			*snapnames_zapobjp =
+			    dsl_dataset_phys(ds)->ds_snapnames_zapobj;
+			*encryptedp = ds->ds_dir->dd_crypto_obj != 0;
+			dsl_dataset_rele(ds, FTAG);
+		}
+		return (error);
+	}
+
+	dsobj = dsl_dir_phys(dd)->dd_head_dataset_obj;
+	if (dsobj == 0) {
+		error = SET_ERROR(ENOENT);
+		goto out;
+	}
+	error = dmu_bonus_hold(mos, dsobj, FTAG, &dbuf);
+	if (error != 0)
+		goto out;
+
+	dmu_object_info_from_db(dbuf, &doi);
+	if (doi.doi_bonus_type != DMU_OT_DSL_DATASET ||
+	    doi.doi_bonus_size < sizeof (dsl_dataset_phys_t)) {
+		error = SET_ERROR(EINVAL);
+		goto out;
+	}
+	dsp = dbuf->db_data;
+	if (dsp->ds_num_children != 0 || dsp->ds_dir_obj != dd->dd_object) {
+		error = SET_ERROR(EINVAL);
+		goto out;
+	}
+
+	*snapnames_zapobjp = dsp->ds_snapnames_zapobj;
+	*encryptedp = dd->dd_crypto_obj != 0;
+out:
+	if (dbuf != NULL)
+		dmu_buf_rele(dbuf, FTAG);
+	dsl_dir_rele(dd, FTAG);
+	return (error);
+}
+
 uint_t zfs_snapshot_list_batch_size =
     ZFS_SNAPSHOT_LIST_BATCH_SIZE_DEFAULT;
 uint_t zfs_snapshot_list_batch_time_us =
@@ -2810,10 +2878,12 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 	uint8_t *defer_destroy = NULL, *written_valid = NULL;
 	nvlist_t *props;
 	uint64_t cursor = 0, min_txg = 0, max_txg = 0, max_results;
+	uint64_t snapnames_zapobj;
 	uint_t batch_size;
 	uint_t batch_time_us = zfs_snapshot_list_batch_time_us;
 	uint_t count = 0;
 	hrtime_t start_time, time_budget;
+	boolean_t done = B_FALSE;
 	boolean_t eof = B_FALSE;
 	boolean_t want_name = B_FALSE;
 	boolean_t want_createtxg = B_FALSE, want_creation = B_FALSE;
@@ -2823,9 +2893,9 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 	boolean_t want_redacted = B_FALSE, want_used = B_FALSE;
 	boolean_t want_referenced = B_FALSE, want_logicalreferenced = B_FALSE;
 	boolean_t want_defer_destroy = B_FALSE, want_written = B_FALSE;
-	dmu_objset_type_t head_type;
-	uint8_t head_flags;
-	objset_t *os = NULL;
+	boolean_t encrypted = B_FALSE;
+	dmu_objset_type_t dmu_type = DMU_OST_NONE;
+	dsl_pool_t *dp = NULL;
 	int error;
 
 	VERIFY0(nvlist_lookup_uint64(innvl, SNAP_ITER_BATCH_MAX_RESULTS,
@@ -2952,16 +3022,20 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 	}
 
 	time_budget = USEC2NSEC((hrtime_t)batch_time_us);
-	error = dmu_objset_hold(fsname, FTAG, &os);
+	error = dsl_pool_hold(fsname, FTAG, &dp);
 	if (error != 0)
 		goto out;
+	error = zfs_snapshot_list_snapnames(dp, fsname, &snapnames_zapobj,
+	    &encrypted);
+	if (error != 0) {
+		done = B_TRUE;
+	} else if (snapnames_zapobj == 0) {
+		eof = B_TRUE;
+		done = B_TRUE;
+	}
 	start_time = gethrtime();
-	head_type = dmu_objset_type(os);
-	head_flags = DDS_FLAG_HAS_ENCRYPTED;
-	if (dmu_objset_ds(os)->ds_dir->dd_crypto_obj != 0)
-		head_flags |= DDS_FLAG_ENCRYPTED;
 
-	while (count < batch_size) {
+	while (!done && count < batch_size) {
 		char snapname[ZFS_MAX_DATASET_NAME_LEN];
 		dsl_dataset_snapshot_stats_t stats;
 		uint64_t obj, txg;
@@ -2971,18 +3045,14 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 			break;
 		}
 
-		error = dmu_snapshot_list_next(os, sizeof (snapname), snapname,
-		    &obj, &cursor, NULL);
-		if (error == ENOENT) {
-			eof = B_TRUE;
-			error = 0;
-			break;
-		} else if (error != 0) {
-			break;
+		error = dmu_snapshot_list_next_impl(dp, snapnames_zapobj,
+		    sizeof (snapname), snapname, &obj, &cursor, NULL);
+		if (error == 0) {
+			error = dsl_dataset_snapshot_stats(dp, obj,
+			    want_userrefs, want_redacted, want_written,
+			    dmu_type == DMU_OST_NONE, encrypted, min_txg,
+			    max_txg, &stats);
 		}
-		error = dsl_dataset_snapshot_stats(dmu_objset_pool(os), obj,
-		    want_userrefs, want_redacted, want_written, min_txg,
-		    max_txg, &stats);
 		/*
 		 * Preserve public iterator partial-list results after a
 		 * post-lookup ENOENT. Reporting EOF lets libzfs consume
@@ -3033,6 +3103,9 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 				writtens[count] = stats.dss_written;
 				written_valid[count] = stats.dss_written_valid;
 			}
+			if (dmu_type == DMU_OST_NONE &&
+			    stats.dss_type != DMU_OST_NONE)
+				dmu_type = stats.dss_type;
 			count++;
 		}
 
@@ -3040,18 +3113,38 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 			break;
 	}
 
-	dmu_objset_rele(os, FTAG);
-	os = NULL;
+	if (dmu_type == DMU_OST_NONE) {
+		dsl_dataset_t *ds;
+		objset_t *os;
+		int metadata_error;
+
+		metadata_error = dsl_dataset_hold(dp, fsname, FTAG, &ds);
+		if (metadata_error == 0) {
+			metadata_error = dmu_objset_from_ds(ds, &os);
+			if (metadata_error == 0)
+				dmu_type = dmu_objset_type(os);
+			dsl_dataset_rele(ds, FTAG);
+		}
+		/*
+		 * On fallback to reading metadata from the current head,
+		 * propagate a failure instead of returning metadata defaults.
+		 */
+		if (metadata_error != 0)
+			error = metadata_error;
+	}
+	dsl_pool_rele(dp, FTAG);
+	dp = NULL;
 	/*
 	 * Return snapshots already collected when processing a later
 	 * snapshot fails so libzfs can preserve iterator callback semantics.
 	 */
-	if (error == 0 || count != 0) {
+	if (error == 0 || (count != 0 && dmu_type != DMU_OST_NONE)) {
 		fnvlist_add_uint64(outnvl, SNAP_ITER_BATCH_CURSOR, cursor);
 		fnvlist_add_uint64(outnvl, SNAP_ITER_BATCH_DMU_TYPE,
-		    head_type);
+		    dmu_type);
 		fnvlist_add_uint64(outnvl, SNAP_ITER_BATCH_DDS_FLAGS,
-		    head_flags);
+		    DDS_FLAG_HAS_ENCRYPTED |
+		    (encrypted ? DDS_FLAG_ENCRYPTED : 0));
 		fnvlist_add_boolean_value(outnvl, SNAP_ITER_BATCH_EOF, eof);
 		if (count != 0 && !nvlist_empty(props)) {
 			nvlist_t *empty_results = fnvlist_alloc();
@@ -3144,8 +3237,8 @@ zfs_ioc_snapshot_list_batch(const char *fsname, nvlist_t *innvl,
 	}
 
 out:
-	if (os != NULL)
-		dmu_objset_rele(os, FTAG);
+	if (dp != NULL)
+		dsl_pool_rele(dp, FTAG);
 	if (want_name) {
 		vmem_free(name_storage,
 		    ZFS_MAX_DATASET_NAME_LEN * batch_size);

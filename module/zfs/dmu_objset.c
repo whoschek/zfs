@@ -692,6 +692,60 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	return (0);
 }
 
+/*
+ * Read a dataset objset type from a caller-stabilized root block pointer
+ * without instantiating the objset. Encrypted objset roots are authenticated
+ * but remain readable in raw form without a loaded key.
+ *
+ * This is essentially a lightweight, non-instantiating cousin of
+ * dmu_objset_open_impl().
+ */
+int
+dmu_objset_type_from_bp(spa_t *spa, uint64_t dsobj, const blkptr_t *bp,
+    boolean_t encrypted, dmu_objset_type_t *typep)
+{
+	arc_buf_t *buf = NULL;
+	arc_flags_t aflags = ARC_FLAG_WAIT;
+	zbookmark_phys_t zb;
+	zio_flag_t zio_flags = ZIO_FLAG_CANFAIL;
+	uint64_t type;
+	int error;
+
+	if (BP_IS_HOLE(bp) || BP_IS_REDACTED(bp) ||
+	    BP_GET_TYPE(bp) != DMU_OT_OBJSET || BP_GET_LEVEL(bp) != 0)
+		return (SET_ERROR(EINVAL));
+
+	if (encrypted) {
+		if (!BP_IS_AUTHENTICATED(bp) ||
+		    BP_GET_COMPRESS(bp) != ZIO_COMPRESS_OFF)
+			return (SET_ERROR(EIO));
+		zio_flags |= ZIO_FLAG_RAW;
+	} else if (BP_IS_PROTECTED(bp)) {
+		return (SET_ERROR(EIO));
+	}
+
+	SET_BOOKMARK(&zb, dsobj, ZB_ROOT_OBJECT, ZB_ROOT_LEVEL,
+	    ZB_ROOT_BLKID);
+	error = arc_read(NULL, spa, bp, arc_getbuf_func, &buf,
+	    ZIO_PRIORITY_SYNC_READ, zio_flags, &aflags, &zb);
+	if (error == ECKSUM)
+		error = SET_ERROR(EIO);
+	if (error != 0)
+		return (error);
+
+	if (arc_buf_size(buf) < OBJSET_PHYS_SIZE_V1) {
+		error = SET_ERROR(EIO);
+	} else {
+		type = ((objset_phys_t *)buf->b_data)->os_type;
+		if (type != DMU_OST_ZFS && type != DMU_OST_ZVOL)
+			error = SET_ERROR(EINVAL);
+		else
+			*typep = type;
+	}
+	arc_buf_destroy(buf, &buf);
+	return (error);
+}
+
 int
 dmu_objset_from_ds(dsl_dataset_t *ds, objset_t **osp)
 {
@@ -2516,18 +2570,35 @@ dmu_snapshot_list_next(objset_t *os, int namelen, char *name,
     uint64_t *idp, uint64_t *offp, boolean_t *case_conflict)
 {
 	dsl_dataset_t *ds = os->os_dsl_dataset;
-	zap_cursor_t cursor;
-	zap_attribute_t *attr;
 
 	ASSERT(dsl_pool_config_held(dmu_objset_pool(os)));
 
-	if (dsl_dataset_phys(ds)->ds_snapnames_zapobj == 0)
+	return (dmu_snapshot_list_next_impl(ds->ds_dir->dd_pool,
+	    dsl_dataset_phys(ds)->ds_snapnames_zapobj, namelen, name, idp,
+	    offp, case_conflict));
+}
+
+/*
+ * Read one entry from a previously resolved snapshot name map. The pool
+ * configuration lock stabilizes the map for the cursor's lifetime. A failed
+ * cursor initialization or retrieval terminates iteration with ENOENT.
+ */
+int
+dmu_snapshot_list_next_impl(dsl_pool_t *dp, uint64_t snapnames_zapobj,
+    int namelen, char *name, uint64_t *idp, uint64_t *offp,
+    boolean_t *case_conflict)
+{
+	zap_cursor_t cursor;
+	zap_attribute_t *attr;
+
+	ASSERT(dsl_pool_config_held(dp));
+
+	if (snapnames_zapobj == 0)
 		return (SET_ERROR(ENOENT));
 
 	attr = zap_attribute_alloc();
-	zap_cursor_init_serialized(&cursor,
-	    ds->ds_dir->dd_pool->dp_meta_objset,
-	    dsl_dataset_phys(ds)->ds_snapnames_zapobj, *offp);
+	zap_cursor_init_serialized(&cursor, dp->dp_meta_objset,
+	    snapnames_zapobj, *offp);
 
 	if (zap_cursor_retrieve(&cursor, attr) != 0) {
 		zap_cursor_fini(&cursor);
